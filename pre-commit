@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+set -x
+
+USE_HOOK=${USE_HOOK:-true}
+
+if [[ $USE_HOOK = false ]]; then
+  exit
+fi
+
+function get_resource_name() {
+  local filename=$1
+  echo "azurerm_$(echo "$filename" | awk -F'/' '{print $NF}' | sed 's/_resource.go//')"
+}
+
+for x in $(git diff --name-only --cached); do
+  if [ ! -e "$x" ] || [ ! -r "$x" ]; then
+    echo "[INFO] $0 - Path '$x' does not exist or is not accessible. Skipping..."
+    continue
+  fi
+
+  if grep -n 'fmt\.Print' "$x"; then
+    echo "[ERROR] Staged file '$x' contains \"fmt.Print\" message, please remove before committing."
+    exit 1
+  fi
+
+  if grep -nE 'utils\.(String|Bool|Int|Float)' "$x"; then
+    echo "[WARN] Staged file contains deprecated function(s) calls \"utils.(String|Bool|Int|Float...)\", replacing with pointer.To()"
+    ~/bin/replace_utils_with_pointer_to.sh "$x"
+  fi
+
+  if grep -nF '**NOTE:**' "$x"; then
+    echo "[ERROR] Staged file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
+    exit 1
+  fi
+
+  if grep -nF '/ Resource Group ' "$x"; then
+    echo "[ERROR] Staged file '$x' contains \"/ Resource Group \", please remove parens and use '%s' and 'id' instead before committing."
+    # For an example, see the following:
+    # https://github.com/hashicorp/terraform-provider-azurerm/pull/29102/files#diff-640df46dc3dc6a04011b29dc4457f815aa661dd268b99d4a18baec275472e0c7R309
+    exit 1
+  fi
+
+  if echo "$x" | grep -E '\.go$'; then
+    gci write "$x"
+    golangci-lint run -v "$x"
+
+    if echo "$x" | grep -E '_resource\.go$'; then
+      go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
+    fi
+  fi
+
+  if echo "$x" | grep -E 'test|markdown'; then
+    terrafmt fmt -f "$x"
+  fi
+
+  if echo "$x" | grep -E '\.kt[s]?$'; then
+    cd ~/terraform-provider-azurerm/.teamcity
+    make validate
+    cd -
+  fi
+
+done
+
+# Making sure changed test code compiles:
+staged_files="$(git diff --name-only --cached | grep -E '^internal/services/.*\.go$' || echo NO_CODE_CHANGES)"
+if [[ $staged_files == NO_CODE_CHANGES ]]; then
+  echo [INFO] "$0" - Skipping build due to no code changes
+else
+  echo [INFO] "$0" - Running build due to code changes
+  service_dirs=$(echo "$staged_files" | awk -F'/' '{print $1"/"$2"/"$3}' | sort | uniq)
+  for dir in $service_dirs; do
+    if [ -d "$dir" ]; then
+      echo "[INFO] Running 'go test -c' in $dir"
+      (cd "$dir" && go test -c)
+    fi
+  done
+  echo [INFO] "$0" - Ensuring the code can compile...
+  go build
+fi
+
+echo [INFO] "$0" - All Pre-Commit checks passed, staging any automatically changed files...
+git add .

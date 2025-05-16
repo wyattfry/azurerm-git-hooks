@@ -44,7 +44,7 @@ for x in $(git diff --name-only --cached); do
 
   if echo "$x" | grep -E '\.go$'; then
     gci write "$x"
-    golangci-lint run -v "$x"
+    golangci-lint run -v "$(echo $x | dirname)"
 
     if echo "$x" | grep -E '_resource\.go$'; then
       go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"

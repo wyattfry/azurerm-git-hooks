@@ -14,6 +14,8 @@ function get_resource_name() {
   echo "azurerm_$(echo "$filename" | awk -F'/' '{print $NF}' | sed 's/_resource.go//')"
 }
 
+declare -A linted_dirs
+
 for x in $(git diff --name-only --cached); do
   if [ ! -e "$x" ] || [ ! -r "$x" ]; then
     echo "[INFO] $0 - Path '$x' does not exist or is not accessible. Skipping..."
@@ -44,7 +46,13 @@ for x in $(git diff --name-only --cached); do
 
   if echo "$x" | grep -E '\.go$'; then
     gci write "$x"
-    golangci-lint run -v "$(echo $x | dirname)"
+    if [[ -v linted_dirs["$x"] ]]; then
+      echo [INFO] "$0" - Skipping golangci-lint on $(dirname "$x") as it has already been run
+    else
+      echo [INFO] "$0" - Running golangci-lint on $(dirname "$x")
+      golangci-lint run -v "$(dirname  "$x")"
+      linted_dirs["$x"]=1
+    fi
 
     if echo "$x" | grep -E '_resource\.go$'; then
       go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"

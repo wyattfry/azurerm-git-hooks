@@ -27,6 +27,11 @@ for x in $(git diff --name-only --cached); do
     exit 1
   fi
 
+  if [[ $x == "vendor"* ]]; then
+    echo [INFO] "$0" - Skipping third party code
+    continue
+  fi
+
   if grep -nE 'utils\.(String|Bool|Int|Float)' "$x"; then
     echo "[WARN] Staged file contains deprecated function(s) calls \"utils.(String|Bool|Int|Float...)\", replacing with pointer.To()"
     ~/bin/replace_utils_with_pointer_to.sh "$x"

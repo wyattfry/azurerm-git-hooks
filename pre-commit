@@ -1,13 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-set -x
+# set -x
 
 USE_HOOK=${USE_HOOK:-true}
 
 if [[ $USE_HOOK = false ]]; then
   exit
 fi
+########### START Colorize Stuff ###########
+
+RED="\e[31m"
+GREEN="\e[32m"
+ENDCOLOR="\e[0m"
+
+print_ok() {
+  echo -e "${GREEN}[OK] $*${ENDCOLOR}"
+}
+
+print_error() {
+  echo -e "${RED}[ERROR] $*${ENDCOLOR}" >&2
+  exit 1
+}
+
+########### END Colorize Stuff ###########
+
+# Wrapper to run a command, suppress output unless it fails, then print stderr
+run_quiet() {
+  local errfile
+  errfile=$(mktemp)
+  "$@" >/dev/null 2>"$errfile" || {
+    print_error "$(cat "$errfile")"
+  }
+  rm -f "$errfile"
+}
 
 function get_resource_name() {
   local filename=$1
@@ -18,13 +44,12 @@ declare -A linted_dirs
 
 for x in $(git diff --name-only --cached); do
   if [ ! -e "$x" ] || [ ! -r "$x" ]; then
-    echo "[INFO] $0 - Path '$x' does not exist or is not accessible. Skipping..."
+    echo "[INFO] Path '$x' does not exist or is not accessible. Skipping..."
     continue
   fi
 
-  if grep -n 'fmt\.Print' "$x"; then
-    echo "[ERROR] Staged file '$x' contains \"fmt.Print\" message, please remove before committing."
-    exit 1
+  if grep -n 'fmt\.Print' "$x" >/dev/null; then
+    print_error "Staged file '$x' contains \"fmt.Print\" message, please remove before committing."
   fi
 
   if [[ $x == "vendor"* ]]; then
@@ -32,66 +57,75 @@ for x in $(git diff --name-only --cached); do
     continue
   fi
 
-  if grep -nE 'utils\.(String|Bool|Int|Float)' "$x"; then
+  if grep -nE 'utils\.(String|Bool|Int|Float)' "$x" >/dev/null; then
     echo "[WARN] Staged file contains deprecated function(s) calls \"utils.(String|Bool|Int|Float...)\", replacing with pointer.To()"
-    ~/bin/replace_utils_with_pointer_to.sh "$x"
+    run_quiet ~/bin/replace_utils_with_pointer_to.sh "$x"
   fi
 
-  if grep -nF '**NOTE:**' "$x"; then
-    echo "[ERROR] Staged file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
-    exit 1
+  if grep -nF '**NOTE:**' "$x" >/dev/null; then
+    print_error "Staged file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
   fi
 
-  if grep -nF '/ Resource Group ' "$x"; then
-    echo "[ERROR] Staged file '$x' contains \"/ Resource Group \", please remove parens and use '%s' and 'id' instead before committing."
-    # For an example, see the following:
-    # https://github.com/hashicorp/terraform-provider-azurerm/pull/29102/files#diff-640df46dc3dc6a04011b29dc4457f815aa661dd268b99d4a18baec275472e0c7R309
-    exit 1
+  if grep -nF '/ Resource Group ' "$x" >/dev/null; then
+    print_error "Staged file '$x' contains \"/ Resource Group \", please remove parens and use '%s' and 'id' instead before committing."
   fi
 
-  if echo "$x" | grep -E '\.go$'; then
-    gci write "$x"
-    if [[ -v linted_dirs["$x"] ]]; then
-      echo [INFO] "$0" - Skipping golangci-lint on $(dirname "$x") as it has already been run
-    else
-      echo [INFO] "$0" - Running golangci-lint on $(dirname "$x")
-      golangci-lint run -v "$(dirname  "$x")"
+  if echo "$x" | grep -E '\.go$' >/dev/null; then
+    run_quiet gci write "$x"
+    if [[ ! -v linted_dirs["$x"] ]]; then
+      echo "[INFO] Running golangci-lint on $(dirname "$x")"
+      run_quiet golangci-lint run -v "$(dirname "$x")"
       linted_dirs["$x"]=1
     fi
 
-    if echo "$x" | grep -E '_resource\.go$'; then
-      go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
+    if echo "$x" | grep -E '_resource\.go$' >/dev/null; then
+      run_quiet go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
     fi
   fi
 
-  if echo "$x" | grep -E 'test|markdown'; then
-    terrafmt fmt -f "$x"
+  if echo "$x" | grep -E 'test|markdown' >/dev/null; then
+    run_quiet terrafmt fmt -f "$x"
   fi
 
-  if echo "$x" | grep -E '\.kt[s]?$'; then
-    cd ~/terraform-provider-azurerm/.teamcity
-    make validate
-    cd -
+  if echo "$x" | grep -E '\.kt[s]?$' >/dev/null; then
+    (cd ~/terraform-provider-azurerm/.teamcity && run_quiet make validate)
   fi
 
 done
 
-# Making sure changed test code compiles:
 staged_files="$(git diff --name-only --cached | grep -E '^internal/services/.*\.go$' || echo NO_CODE_CHANGES)"
 if [[ $staged_files == NO_CODE_CHANGES ]]; then
-  echo [INFO] "$0" - Skipping build due to no code changes
+  echo "[INFO] Skipping build due to no code changes"
 else
-  echo [INFO] "$0" - Running build due to code changes
+  echo "[INFO] Due to code changes, running run-tflint.sh and building code in parallel"
+  tflint_err=$(mktemp)
+  build_err=$(mktemp)
+  # Do NOT use run_quiet for background jobs, just redirect stdout and stderr
+  bash -c "$HOME/terraform-provider-azurerm/scripts/run-tflint.sh" >/dev/null 2>"$tflint_err" &
+  tflint_pid=$!
+
   service_dirs=$(echo "$staged_files" | awk -F'/' '{print $1"/"$2"/"$3}' | sort | uniq)
   for dir in $service_dirs; do
     if [ -d "$dir" ]; then
       echo "[INFO] Running 'go test -c' in $dir"
-      (cd "$dir" && go test -c)
+      (cd "$dir" && run_quiet go test -c)
     fi
   done
-  echo [INFO] "$0" - Ensuring the code can compile...
-  go build
+  echo "[INFO] Ensuring the code can compile..."
+  go build >/dev/null 2>"$build_err" &
+  build_pid=$!
+
+  if ! wait $tflint_pid; then
+    cat $tflint_err
+    exit 1
+  fi
+
+  if ! wait $build_pid; then
+    cat $build_err
+    exit 1
+  fi
 fi
 
-echo [INFO] "$0" - All Pre-Commit checks passed, staging any automatically changed files...
+print_ok "All Pre-Commit checks passed, staging any automatically changed files..."
+
 git add .

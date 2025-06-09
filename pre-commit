@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# set -x
-
 USE_HOOK=${USE_HOOK:-true}
 
 if [[ $USE_HOOK = false ]]; then
   exit
 fi
-########### START Colorize Stuff ###########
 
 RED="\e[31m"
 GREEN="\e[32m"
@@ -19,17 +16,16 @@ print_ok() {
 }
 
 print_error() {
-  echo -e "${RED}[ERROR] $*${ENDCOLOR}" >&2
+  echo -e "${RED}[ERROR] A command returned a non-zero exit code. Output from failing command:${ENDCOLOR}"
+  echo "$*"
   exit 1
 }
-
-########### END Colorize Stuff ###########
 
 # Wrapper to run a command, suppress output unless it fails, then print stderr
 run_quiet() {
   local errfile
   errfile=$(mktemp)
-  "$@" >/dev/null 2>"$errfile" || {
+  "$@" &>"$errfile" || {
     print_error "$(cat "$errfile")"
   }
   rm -f "$errfile"
@@ -40,7 +36,10 @@ function get_resource_name() {
   echo "azurerm_$(echo "$filename" | awk -F'/' '{print $NF}' | sed 's/_resource.go//')"
 }
 
+# Track linted directories to avoid duplicating work
 declare -A linted_dirs
+
+echo [INFO] Running pre-commit checks...
 
 for x in $(git diff --name-only --cached); do
   if [ ! -e "$x" ] || [ ! -r "$x" ]; then
@@ -62,20 +61,17 @@ for x in $(git diff --name-only --cached); do
     run_quiet ~/bin/replace_utils_with_pointer_to.sh "$x"
   fi
 
-  if grep -nF '**NOTE:**' "$x" >/dev/null; then
-    print_error "Staged file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
-  fi
-
   if grep -nF '/ Resource Group ' "$x" >/dev/null; then
     print_error "Staged file '$x' contains \"/ Resource Group \", please remove parens and use '%s' and 'id' instead before committing."
   fi
 
   if echo "$x" | grep -E '\.go$' >/dev/null; then
-    run_quiet gci write "$x"
-    if [[ ! -v linted_dirs["$x"] ]]; then
-      echo "[INFO] Running golangci-lint on $(dirname "$x")"
-      run_quiet golangci-lint run -v "$(dirname "$x")"
-      linted_dirs["$x"]=1
+    run_quiet gci write "$x"  # Cleanup imports
+    dir_with_changed_code="$(dirname "$x")"
+    if [[ ! -v linted_dirs[$dir_with_changed_code)] ]]; then
+      echo "[INFO] Running golangci-lint on $dir_with_changed_code due to *.go changes in that directory"
+      run_quiet golangci-lint run -v "$dir_with_changed_code"
+      linted_dirs[$dir_with_changed_code]=1
     fi
 
     if echo "$x" | grep -E '_resource\.go$' >/dev/null; then
@@ -84,6 +80,9 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if echo "$x" | grep -E 'test|markdown' >/dev/null; then
+    if grep -nF '**NOTE:**' "$x" >/dev/null; then
+      print_error "Staged file documentation file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
+    fi
     run_quiet terrafmt fmt -f "$x"
   fi
 

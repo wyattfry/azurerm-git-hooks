@@ -52,7 +52,6 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if [[ $x == "vendor"* ]]; then
-    echo [INFO] "$0" - Skipping third party code
     continue
   fi
 
@@ -66,9 +65,9 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if echo "$x" | grep -E '\.go$' >/dev/null; then
-    run_quiet gci write "$x"  # Cleanup imports
+    run_quiet gci write "$x" # Cleanup imports
     dir_with_changed_code="$(dirname "$x")"
-    if [[ ! -v linted_dirs[$dir_with_changed_code)] ]]; then
+    if [[ ! -v linted_dirs[$dir_with_changed_code] ]]; then
       echo "[INFO] Running golangci-lint on $dir_with_changed_code due to *.go changes in that directory"
       run_quiet golangci-lint run -v "$dir_with_changed_code"
       linted_dirs[$dir_with_changed_code]=1
@@ -80,10 +79,11 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if echo "$x" | grep -E 'test|markdown' >/dev/null; then
-    if grep -nF '**NOTE:**' "$x" >/dev/null; then
-      print_error "Staged file documentation file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
-    fi
     run_quiet terrafmt fmt -f "$x"
+  fi
+
+  if echo "$x" | grep -E 'markdown' >/dev/null && grep -nF '**NOTE:**' "$x" >/dev/null; then
+    print_error "Staged file documentation file '$x' contains \"NOTE\", please replace with \"Note\" before committing."
   fi
 
   if echo "$x" | grep -E '\.kt[s]?$' >/dev/null; then

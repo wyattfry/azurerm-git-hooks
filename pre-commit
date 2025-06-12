@@ -37,7 +37,8 @@ function get_resource_name() {
 }
 
 # Track linted directories to avoid duplicating work
-declare -A linted_dirs
+declare -A dirs_to_lint
+script_dir="$(dirname "$(readlink -f "$0")")" # Does not have a trailing slash
 
 echo [INFO] Running pre-commit checks...
 
@@ -66,12 +67,10 @@ for x in $(git diff --name-only --cached); do
 
   if echo "$x" | grep -E '\.go$' >/dev/null; then
     run_quiet gci write "$x" # Cleanup imports
-    dir_with_changed_code="$(dirname "$x")"
-    if [[ ! -v linted_dirs[$dir_with_changed_code] ]]; then
-      echo "[INFO] Running golangci-lint on $dir_with_changed_code due to *.go changes in that directory"
-      run_quiet golangci-lint run -v "$dir_with_changed_code"
-      linted_dirs[$dir_with_changed_code]=1
-    fi
+    # Ensure this directory is in the set of dirs to lint once all the single-file actions are done
+    dirs_to_lint[$(dirname "$x")]=1
+
+    "${script_dir}/field-name-check.sh" "$x"
 
     if echo "$x" | grep -E '_resource\.go$' >/dev/null; then
       run_quiet go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
@@ -90,6 +89,11 @@ for x in $(git diff --name-only --cached); do
     (cd ~/terraform-provider-azurerm/.teamcity && run_quiet make validate)
   fi
 
+done
+
+for dir in "${!dirs_to_lint[@]}"; do
+      echo "[INFO] Running golangci-lint on '$dir' due to *.go changes in that directory"
+      run_quiet golangci-lint run -v "$dir"
 done
 
 staged_files="$(git diff --name-only --cached | grep -E '^internal/services/.*\.go$' || echo NO_CODE_CHANGES)"

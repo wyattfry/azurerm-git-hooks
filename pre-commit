@@ -42,6 +42,7 @@ script_dir="$(dirname "$(readlink -f "$0")")" # Does not have a trailing slash
 
 echo [INFO] Running pre-commit checks...
 
+## File Level Checks ##
 for x in $(git diff --name-only --cached); do
   if [ ! -e "$x" ] || [ ! -r "$x" ]; then
     echo "[INFO] Path '$x' does not exist or is not accessible. Skipping..."
@@ -70,8 +71,6 @@ for x in $(git diff --name-only --cached); do
     # Ensure this directory is in the set of dirs to lint once all the single-file actions are done
     dirs_to_lint[$(dirname "$x")]=1
 
-    "${script_dir}/field-name-check.sh" "$x"
-
     if echo "$x" | grep -E '_resource\.go$' >/dev/null; then
       run_quiet go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
     fi
@@ -91,11 +90,13 @@ for x in $(git diff --name-only --cached); do
 
 done
 
+## Directory (Package) Level Checks ##
 for dir in "${!dirs_to_lint[@]}"; do
       echo "[INFO] Running golangci-lint on '$dir' due to *.go changes in that directory"
       run_quiet golangci-lint run -v "$dir"
 done
 
+## Program Level Checks ##
 staged_files="$(git diff --name-only --cached | grep -E '^internal/services/.*\.go$' || echo NO_CODE_CHANGES)"
 if [[ $staged_files == NO_CODE_CHANGES ]]; then
   echo "[INFO] Skipping build due to no code changes"

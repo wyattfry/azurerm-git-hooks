@@ -4,6 +4,8 @@ Some functions in the Terraform SDK that take as arguments the names of configur
 given input that does not match the name of any fields in the package. This program detects if the string
 arguments to these functions do not match any field names in the same packages.
 
+A zero exit code indicates no problems found. Any other code, along with output, indicates that a discrepancy was found.
+
 These functions include:
 
 * HasChange()

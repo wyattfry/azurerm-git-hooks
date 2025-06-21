@@ -58,8 +58,7 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if grep -nE 'utils\.(String|Bool|Int|Float)' "$x" >/dev/null; then
-    echo "[WARN] Staged file contains deprecated function(s) calls \"utils.(String|Bool|Int|Float...)\", replacing with pointer.To()"
-    run_quiet ~/bin/replace_utils_with_pointer_to.sh "$x"
+    echo "[WARN] Staged file contains deprecated function(s) calls \"utils.(String|Bool|Int|Float...)\", replacing with pointer.To()" && run_quiet ~/bin/replace_utils_with_pointer_to.sh "$x"
   fi
 
   if grep -nF '/ Resource Group ' "$x" >/dev/null; then
@@ -67,17 +66,17 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if echo "$x" | grep -E '\.go$' >/dev/null; then
-    run_quiet gci write "$x" # Cleanup imports
-    # Ensure this directory is in the set of dirs to lint once all the single-file actions are done
+    echo "[INFO] Removing unused imports for '$x'" && goimports -w "$x"
+    echo "[INFO] Reordering imports for '$x'" && run_quiet gci write "$x"
     dirs_to_lint[$(dirname "$x")]=1
 
     if echo "$x" | grep -E '_resource\.go$' >/dev/null; then
-      run_quiet go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
+      echo "[INFO] document-lint check for '$(get_resource_name "$x")'"  && run_quiet go run ~/terraform-provider-azurerm/internal/tools/document-lint check -resource "$(get_resource_name "$x")"
     fi
   fi
 
   if echo "$x" | grep -E 'test|markdown' >/dev/null; then
-    run_quiet terrafmt fmt -f "$x"
+    echo "[INFO] terraform fmt for '$x'" && run_quiet terrafmt fmt -f "$x"
   fi
 
   if echo "$x" | grep -E 'markdown' >/dev/null && grep -nF '**NOTE:**' "$x" >/dev/null; then
@@ -85,15 +84,15 @@ for x in $(git diff --name-only --cached); do
   fi
 
   if echo "$x" | grep -E '\.kt[s]?$' >/dev/null; then
-    (cd ~/terraform-provider-azurerm/.teamcity && run_quiet make validate)
+    echo "[INFO] ensuring Teamcity project passes validation" && (cd ~/terraform-provider-azurerm/.teamcity && run_quiet make validate)
   fi
 
 done
 
 ## Directory (Package) Level Checks ##
 for dir in "${!dirs_to_lint[@]}"; do
-      echo "[INFO] Running golangci-lint on '$dir' due to *.go changes in that directory"
-      run_quiet golangci-lint run -v "$dir"
+      echo "[INFO] Running golangci-lint on '$dir' due to *.go changes in that directory" && run_quiet golangci-lint run -v "$dir"
+      echo "[INFO] Checking field names for './$dir'" && field-name-checker "./$dir"
 done
 
 ## Program Level Checks ##
